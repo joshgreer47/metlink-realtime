@@ -1,0 +1,85 @@
+{
+  "source": {
+    "catalog": "metlink",
+    "observed_from": "2026-09-26T00:30:18.000Z",
+    "observed_to": "2026-09-26T02:37:06.000Z",
+    "trips": 473,
+    "calibrated_at": "2026-09-26T02:58:58+00:00"
+  },
+  "modes": {
+    "bus": {
+      "trips": 439,
+      "initial_delay_source": "origin departures",
+      "initial_delay_quantiles": [
+        [0.0, -259.0],
+        [0.02, -37.0],
+        [0.05, 0.0],
+        [0.1, 0.0],
+        [0.2, 0.0],
+        [0.3, 0.0],
+        [0.4, 0.0],
+        [0.5, 0.0],
+        [0.6, 23.0],
+        [0.7, 49.0],
+        [0.8, 87.0],
+        [0.9, 170.0],
+        [0.95, 398.0],
+        [0.98, 480.0],
+        [1.0, 779.0]
+      ],
+      "origin_departures": 259,
+      "steps": 9561,
+      "step_mean_s": -0.83,
+      "step_sd_s": 73.93,
+      "mean_delay_s": 141.2,
+      "hourly_mean_s": {
+        "saturday": {
+          "12": 144.5,
+          "13": 136.2,
+          "14": 146.9
+        }
+      },
+      "occupancy": {
+        "EMPTY": 0.2948,
+        "FEW_SEATS_AVAILABLE": 0.032,
+        "MANY_SEATS_AVAILABLE": 0.6637,
+        "STANDING_ROOM_ONLY": 0.0094
+      }
+    },
+    "rail": {
+      "trips": 34,
+      "initial_delay_source": "first seen",
+      "initial_delay_quantiles": [
+        [0.0, 0.0],
+        [0.02, 0.0],
+        [0.05, 0.0],
+        [0.1, 0.0],
+        [0.2, 0.0],
+        [0.3, 0.0],
+        [0.4, 0.0],
+        [0.5, 0.0],
+        [0.6, 0.0],
+        [0.7, 0.0],
+        [0.8, 75.0],
+        [0.9, 193.0],
+        [0.95, 283.0],
+        [0.98, 383.0],
+        [1.0, 383.0]
+      ],
+      "steps": 251,
+      "step_mean_s": 14.13,
+      "step_sd_s": 60.42,
+      "mean_delay_s": 131.9,
+      "hourly_mean_s": {
+        "saturday": {
+          "12": 184.3,
+          "13": 135.8,
+          "14": 113.2
+        }
+      },
+      "occupancy": {
+        "null": 1.0
+      }
+    }
+  }
+}
