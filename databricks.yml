@@ -8,6 +8,26 @@ variables:
     default: metlink
 
 resources:
+  pipelines:
+    metlink_realtime:
+      name: metlink-realtime
+      catalog: ${var.catalog}
+      schema: silver
+      serverless: true
+      continuous: false
+      channel: CURRENT
+      configuration:
+        catalog: ${var.catalog}
+      libraries:
+        - file:
+            path: ./src/pipelines/realtime/bronze.py
+        - file:
+            path: ./src/pipelines/realtime/silver_vehicles.py
+        - file:
+            path: ./src/pipelines/realtime/silver_trips.py
+        - file:
+            path: ./src/pipelines/realtime/silver_alerts.py
+
   jobs:
     static_gtfs_refresh:
       name: metlink-static-gtfs-refresh
@@ -21,6 +41,16 @@ resources:
             notebook_path: ./src/notebooks/02_load_static_gtfs.py
             base_parameters:
               catalog: ${var.catalog}
+
+    realtime_refresh:
+      name: metlink-realtime-refresh
+      schedule:
+        quartz_cron_expression: "0 5 * * * ?"
+        timezone_id: Pacific/Auckland
+      tasks:
+        - task_key: refresh_realtime_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.metlink_realtime.id}
 
 targets:
   dev:

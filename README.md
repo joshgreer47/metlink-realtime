@@ -59,7 +59,8 @@ src/notebooks/            Databricks notebooks
   00_setup.py             Catalog, schemas and volume
   01_connectivity_test.py Workspace egress check
   02_load_static_gtfs.py  Static GTFS CSVs to bronze Delta tables
-databricks.yml            Databricks Asset Bundle (jobs)
+src/pipelines/realtime/   Lakeflow Declarative Pipeline: realtime bronze and silver
+databricks.yml            Databricks Asset Bundle (pipeline and jobs)
 tests/                    Unit tests
 ```
 
@@ -105,6 +106,24 @@ python -m poller.metlink_poller                         # run continuously
 ```
 Stop with `Ctrl+C`. Buffered polls are flushed and uploaded on exit.
 
+## Realtime pipeline
+
+`metlink-realtime` is a serverless Lakeflow Declarative Pipeline. It runs in triggered mode, refreshed hourly by the
+`metlink-realtime-refresh` job.
+
+| Table | Type | Grain |
+|---|---|---|
+| `bronze.rt_trip_updates`, `bronze.rt_vehicle_positions`, `bronze.rt_service_alerts` | Streaming (Auto Loader) | One row per poll |
+| `silver.vehicle_positions` | Streaming | One row per vehicle position report |
+| `silver.vehicle_current` | AUTO CDC, SCD1 | One row per vehicle, latest position |
+| `silver.trip_updates` | Streaming | One row per stop-time prediction |
+| `silver.trip_stop_delays` | AUTO CDC, SCD2 | One version per change in predicted delay, per trip and stop |
+| `silver.service_alerts` | AUTO CDC, SCD2 | One version per change to an alert |
+| `silver.service_alert_entities` | Materialized view | One row per route, stop or trip affected by an active alert |
+
+Silver timestamps are UTC, with `*_local` companions in `Pacific/Auckland`. `service_date` is the GTFS trip start
+date. Data quality expectations drop records without keys or with positions outside the Wellington region.
+
 ## Data format
 
 Each realtime file is JSON Lines, with one record per poll of one feed:
@@ -134,8 +153,8 @@ CI runs linting and tests on every push and pull request (`.github/workflows/ci.
 
 - [x] Static GTFS ingestion to bronze Delta tables
 - [x] Realtime collection to Unity Catalog volumes
-- [ ] Incremental bronze ingestion of realtime feeds (Auto Loader)
-- [ ] Silver models: vehicle positions, current vehicle state (SCD1), trip delay history (SCD2), service alerts
+- [x] Incremental bronze ingestion of realtime feeds (Auto Loader)
+- [x] Silver models: vehicle positions, current vehicle state (SCD1), trip delay history (SCD2), service alerts
 - [ ] Gold metrics: on-time performance, stop delay statistics, headway regularity, bus bunching
 - [ ] Orchestration: multi-task jobs with data quality checks, and an Apache Airflow deployment
 - [ ] AI/BI dashboards and a Genie space
