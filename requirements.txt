@@ -1,0 +1,5 @@
+requests>=2.31
+gtfs-realtime-bindings>=1.0.0
+protobuf>=4.21
+databricks-sdk>=0.40
+python-dotenv>=1.0

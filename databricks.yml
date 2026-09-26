@@ -1,0 +1,29 @@
+# Databricks Asset Bundle: deploy with `databricks bundle deploy -t dev`
+bundle:
+  name: metlink-realtime
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for all project objects
+    default: metlink
+
+resources:
+  jobs:
+    static_gtfs_refresh:
+      name: metlink-static-gtfs-refresh
+      # No cluster config: notebook tasks run on serverless compute.
+      schedule:
+        quartz_cron_expression: "0 0 4 * * ?"
+        timezone_id: Pacific/Auckland
+      tasks:
+        - task_key: load_static_gtfs
+          notebook_task:
+            notebook_path: ./src/notebooks/02_load_static_gtfs.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+targets:
+  dev:
+    mode: development # prefixes resource names and pauses schedules
+    default: true
+    # Workspace host comes from DATABRICKS_HOST or your ~/.databrickscfg profile.

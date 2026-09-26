@@ -1,0 +1,18 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# local poller output
+data/
+
+# Databricks bundle state
+.databricks/
+
+# Airflow (Astro) local files
+airflow/.astro/
+airflow/logs/
+
+# personal notes (not published)
+notes/
