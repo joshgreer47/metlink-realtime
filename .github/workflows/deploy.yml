@@ -1,0 +1,45 @@
+name: Deploy
+
+# Validates the bundle on pull requests and deploys the dev target on pushes to main.
+# Requires repository secrets DATABRICKS_HOST and DATABRICKS_TOKEN; without them the jobs skip.
+
+on:
+  push:
+    branches: [main]
+    paths: ["databricks.yml", "resources/**", "src/**", ".github/workflows/deploy.yml"]
+  pull_request:
+    paths: ["databricks.yml", "resources/**", "src/**", ".github/workflows/deploy.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for credentials
+        id: creds
+        run: |
+          if [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::DATABRICKS_HOST / DATABRICKS_TOKEN secrets not set; skipping bundle validation and deploy."
+          fi
+      - uses: actions/checkout@v5
+        if: steps.creds.outputs.available == 'true'
+      - uses: databricks/setup-cli@main
+        if: steps.creds.outputs.available == 'true'
+      - name: Validate
+        if: steps.creds.outputs.available == 'true'
+        run: |
+          databricks bundle validate -t dev
+          databricks bundle validate -t sim
+      - name: Deploy dev
+        if: steps.creds.outputs.available == 'true' && github.event_name != 'pull_request'
+        run: databricks bundle deploy -t dev
