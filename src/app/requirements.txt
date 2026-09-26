@@ -1,0 +1,3 @@
+streamlit>=1.38
+databricks-sdk>=0.40
+pandas>=2.0

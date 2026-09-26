@@ -1,0 +1,20 @@
+# Departures board (Databricks Apps). Runs as its own service principal, which needs read access to the catalog;
+# see README: Departures app.
+resources:
+  apps:
+    departures:
+      name: metlink-departures-${bundle.target}
+      description: Upcoming arrivals and service alerts for a Metlink stop
+      source_code_path: ../src/app
+      config:
+        command: ["streamlit", "run", "app.py", "--server.headless", "true"]
+        env:
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: sql_warehouse
+          - name: METLINK_CATALOG
+            value: ${var.catalog}
+      resources:
+        - name: sql_warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE

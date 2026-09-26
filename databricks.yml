@@ -2,12 +2,38 @@
 bundle:
   name: metlink-realtime
 
+include:
+  - resources/*.yml
+
 variables:
   catalog:
     description: Unity Catalog catalog for all project objects
     default: metlink
+  static_catalog:
+    description: Catalog holding the static GTFS bronze tables
+    default: metlink
+  check_freshness:
+    description: Whether data quality checks require recently collected data
+    default: "true"
+  daily_pause_status:
+    description: PAUSED or UNPAUSED for the daily job schedule
+    default: UNPAUSED
+  ml_scoring_as_of:
+    description: Local time the ML job scores at (blank = latest arrival)
+    default: ""
+  warehouse_id:
+    description: SQL warehouse for dashboards
+    lookup:
+      warehouse: Serverless Starter Warehouse
 
 resources:
+  dashboards:
+    network_performance:
+      display_name: Metlink network performance
+      file_path: ./src/dashboards/network_performance.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+
   pipelines:
     metlink_realtime:
       name: metlink-realtime
@@ -18,6 +44,7 @@ resources:
       channel: CURRENT
       configuration:
         catalog: ${var.catalog}
+        static_catalog: ${var.static_catalog}
       libraries:
         - file:
             path: ./src/pipelines/realtime/bronze.py
@@ -27,33 +54,120 @@ resources:
             path: ./src/pipelines/realtime/silver_trips.py
         - file:
             path: ./src/pipelines/realtime/silver_alerts.py
+        - file:
+            path: ./src/pipelines/realtime/silver_routes.py
+        - file:
+            path: ./src/pipelines/realtime/silver_arrivals.py
+        - file:
+            path: ./src/pipelines/realtime/gold.py
+        - file:
+            path: ./src/pipelines/realtime/gold_benchmark.py
+        - file:
+            path: ./src/pipelines/realtime/gold_network.py
 
   jobs:
-    static_gtfs_refresh:
-      name: metlink-static-gtfs-refresh
-      # No cluster config: notebook tasks run on serverless compute.
+    setup:
+      name: metlink-setup
+      tasks:
+        - task_key: setup_catalog
+          notebook_task:
+            notebook_path: ./src/notebooks/00_setup.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+    daily:
+      name: metlink-daily
       schedule:
-        quartz_cron_expression: "0 0 4 * * ?"
+        quartz_cron_expression: "0 0 5 * * ?"
         timezone_id: Pacific/Auckland
+        pause_status: ${var.daily_pause_status}
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
       tasks:
         - task_key: load_static_gtfs
           notebook_task:
             notebook_path: ./src/notebooks/02_load_static_gtfs.py
             base_parameters:
+              catalog: ${var.static_catalog}
+        - task_key: refresh_pipeline
+          depends_on:
+            - task_key: load_static_gtfs
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.metlink_realtime.id}
+        - task_key: data_quality
+          depends_on:
+            - task_key: refresh_pipeline
+          notebook_task:
+            notebook_path: ./src/notebooks/03_data_quality.py
+            base_parameters:
+              catalog: ${var.catalog}
+              static_catalog: ${var.static_catalog}
+              pipeline_id: ${resources.pipelines.metlink_realtime.id}
+              check_freshness: ${var.check_freshness}
+        - task_key: classify_alerts
+          depends_on:
+            - task_key: refresh_pipeline
+          notebook_task:
+            notebook_path: ./src/notebooks/20_classify_alerts.py
+            base_parameters:
               catalog: ${var.catalog}
 
-    realtime_refresh:
-      name: metlink-realtime-refresh
-      schedule:
-        quartz_cron_expression: "0 5 * * * ?"
-        timezone_id: Pacific/Auckland
+    realtime_on_arrival:
+      name: metlink-realtime-on-arrival
+      # Event-driven alternative to the daily schedule: refreshes the pipeline when new batches land, at most hourly.
+      # Paused by default because it uses far more serverless quota than the daily job.
+      trigger:
+        pause_status: PAUSED
+        file_arrival:
+          url: /Volumes/${var.catalog}/bronze/raw/realtime/
+          min_time_between_triggers_seconds: 3600
+          wait_after_last_change_seconds: 120
       tasks:
-        - task_key: refresh_realtime_pipeline
+        - task_key: refresh_pipeline
           pipeline_task:
             pipeline_id: ${resources.pipelines.metlink_realtime.id}
 
+    ml_arrival_delay:
+      name: metlink-ml-arrival-delay
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: static_catalog
+          default: ${var.static_catalog}
+        - name: as_of
+          default: ${var.ml_scoring_as_of}
+      tasks:
+        - task_key: build_features
+          notebook_task:
+            notebook_path: ./src/notebooks/10_ml_features.py
+        - task_key: train
+          depends_on:
+            - task_key: build_features
+          notebook_task:
+            notebook_path: ./src/notebooks/11_ml_train.py
+        - task_key: score
+          depends_on:
+            - task_key: train
+          notebook_task:
+            notebook_path: ./src/notebooks/12_ml_batch_inference.py
+
 targets:
   dev:
-    mode: development # prefixes resource names and pauses schedules
+    mode: development # prefixes resource names
     default: true
     # Workspace host comes from DATABRICKS_HOST or your ~/.databrickscfg profile.
+
+  sim:
+    # Same pipeline over simulated data (python -m simulator.generate), reading the real static timetable.
+    mode: development
+    presets:
+      name_prefix: "[sim ${workspace.current_user.short_name}] "
+    variables:
+      catalog: metlink_sim
+      check_freshness: "false"
+      daily_pause_status: PAUSED
+      ml_scoring_as_of: "2026-09-25 08:00:00"

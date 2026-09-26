@@ -1,0 +1,62 @@
+# Genie space over the gold layer. Identifiers resolve against the target's catalog.
+resources:
+  genie_spaces:
+    metlink_network:
+      title: Metlink network performance
+      description: Ask questions about Metlink punctuality, headways, bunching and service alerts.
+      warehouse_id: ${var.warehouse_id}
+      serialized_space:
+        version: 2
+        config:
+          sample_questions:
+            - id: a1000000000000000000000000000001
+              question: ["Which 10 routes had the lowest on-time rate over the last 7 days, with at least 100 arrivals?"]
+            - id: a1000000000000000000000000000002
+              question: ["How does the on-time rate change by hour of day on weekdays?"]
+            - id: a1000000000000000000000000000003
+              question: ["Which routes have the most bunching events?"]
+            - id: a1000000000000000000000000000004
+              question: ["How does our punctuality compare with Metlink's published figures?"]
+        data_sources:
+          tables:
+            - identifier: ${var.catalog}.gold.bus_bunching_events
+              description: ["One row per bunching event: a vehicle arriving at a stop less than a quarter of the scheduled headway after the vehicle in front on the same route and direction."]
+            - identifier: ${var.catalog}.gold.headway_regularity
+              description: ["Headway regularity per route, direction, service date and scheduled hour. headway_cv = stddev(actual - scheduled headway) / mean(scheduled headway); lower is more regular. bunched = number of bunching events."]
+            - identifier: ${var.catalog}.gold.punctuality_benchmark
+              description: ["Per route (plus 'All routes'): our bus punctuality using Metlink's definition, with a 95% interval, against Metlink's published figure for the same weeks or its latest published weeks (see comparison_basis)."]
+            - identifier: ${var.catalog}.gold.route_ontime_hourly
+              description: ["Arrival punctuality at every observed stop, per route, direction, service date and scheduled hour (local time). Columns arrivals, early, on_time, late are counts."]
+            - identifier: ${var.catalog}.gold.route_punctuality_weekly
+              description: ["Bus punctuality per route and Monday-starting week using Metlink's definition (departure from the first stop), comparable with Metlink's weekly file."]
+            - identifier: ${var.catalog}.gold.stop_delay_stats
+              description: ["Arrival punctuality per stop, day type (weekday, saturday, sunday) and scheduled hour, across all history."]
+            - identifier: ${var.catalog}.silver.routes
+              description: ["One row per route: route_short_name (the number riders see), route_long_name, mode (bus, school bus, rail, ferry, cable car), mode_group (bus, rail, ferry & cable car) and route_label for display."]
+            - identifier: ${var.catalog}.silver.service_alert_entities
+              description: ["Routes, stops and trips affected by the current version of each service alert."]
+        instructions:
+          text_instructions:
+            - id: b1000000000000000000000000000001
+              content:
+                - "Two punctuality measures exist; say which one an answer uses. "
+                - "(1) On-time arrival (gold.route_ontime_hourly, gold.stop_delay_stats): an arrival at any observed stop no more than 1 minute early and less than 5 minutes late. "
+                - "(2) Metlink bus punctuality (gold.route_punctuality_weekly, gold.punctuality_benchmark): a trip departing its first stop less than 1 min 15 s early and less than 5 min 15 s late, the measure Metlink publishes. "
+                - "Always compute rates from counts, for example sum(on_time) / sum(arrivals), never by averaging a rate column across rows. "
+                - "hour is the scheduled hour in Pacific/Auckland local time. service_date is the GTFS service date. "
+                - "Show routes with route_label, or with route_short_name when a short answer is needed. "
+                - "When ranking routes, exclude routes with few observations (for example fewer than 100 arrivals) and state the threshold."
+          example_question_sqls:
+            - id: c1000000000000000000000000000001
+              question: ["What is the on-time rate by mode?"]
+              sql:
+                - "SELECT mode_group, sum(arrivals) AS arrivals, round(sum(on_time) / sum(arrivals), 3) AS on_time_rate\n"
+                - "FROM ${var.catalog}.gold.route_ontime_hourly\n"
+                - "GROUP BY mode_group ORDER BY on_time_rate"
+            - id: c1000000000000000000000000000002
+              question: ["Which routes had the lowest on-time rate?"]
+              sql:
+                - "SELECT route_label, sum(arrivals) AS arrivals, round(sum(on_time) / sum(arrivals), 3) AS on_time_rate\n"
+                - "FROM ${var.catalog}.gold.route_ontime_hourly\n"
+                - "GROUP BY route_label HAVING sum(arrivals) >= 100\n"
+                - "ORDER BY on_time_rate LIMIT 10"

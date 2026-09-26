@@ -1,0 +1,2076 @@
+{
+  "datasets": [
+    {
+      "name": "punctuality",
+      "displayName": "Punctuality by route and hour",
+      "queryLines": [
+        "SELECT service_date, hour, concat(CAST(dayofweek_iso AS STRING), ' ', date_format(service_date, 'E')) AS weekday,\n",
+        "  route_label, mode, mode_group, arrivals, early, on_time, late, avg_delay_s * arrivals AS total_delay_s\n",
+        "FROM (SELECT *, weekday(service_date) + 1 AS dayofweek_iso FROM gold.route_ontime_hourly)\n"
+      ]
+    },
+    {
+      "name": "regularity",
+      "displayName": "Headway regularity by route and hour",
+      "queryLines": [
+        "SELECT service_date, hour, route_label, mode, mode_group, headways, bunched, headway_cv,\n",
+        "  avg_scheduled_headway_s / 60 AS avg_scheduled_headway_min, avg_actual_headway_s / 60 AS avg_actual_headway_min\n",
+        "FROM gold.headway_regularity\n"
+      ]
+    },
+    {
+      "name": "bunching",
+      "displayName": "Bunching events",
+      "queryLines": [
+        "SELECT service_date, mode, mode_group, route_label, stop_name,\n",
+        "  from_utc_timestamp(arrival_at, 'Pacific/Auckland') AS arrived_at,\n",
+        "  leading_vehicle_id, vehicle_id, round(actual_headway_s / 60, 1) AS actual_headway_min,\n",
+        "  round(scheduled_headway_s / 60, 1) AS scheduled_headway_min\n",
+        "FROM gold.bus_bunching_events\n"
+      ]
+    },
+    {
+      "name": "vehicles",
+      "displayName": "Latest vehicle positions",
+      "queryLines": [
+        "SELECT vehicle_id, coalesce(route_label, 'Not in service') AS route, mode, mode_group, latitude, longitude,\n",
+        "  occupancy_status, position_at_local, snapshot_at\n",
+        "FROM gold.vehicle_latest\n"
+      ]
+    },
+    {
+      "name": "alerts",
+      "displayName": "Active service alerts",
+      "queryLines": [
+        "WITH current AS (\n",
+        "  SELECT * FROM silver.service_alerts\n",
+        "  WHERE __END_AT IS NULL\n",
+        "    AND last_seen_at >= (SELECT max(last_seen_at) FROM silver.service_alerts) - INTERVAL 1 HOUR\n",
+        ")\n",
+        "SELECT a.alert_id, a.effect, a.cause, a.severity_level, a.header_text,\n",
+        "  from_utc_timestamp(a.active_start_at, 'Pacific/Auckland') AS active_from,\n",
+        "  from_utc_timestamp(a.active_end_at, 'Pacific/Auckland') AS active_until,\n",
+        "  count(DISTINCT e.route_id) AS routes_affected, count(DISTINCT e.stop_id) AS stops_affected\n",
+        "FROM current a LEFT JOIN silver.service_alert_entities e USING (alert_id)\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "benchmark",
+      "displayName": "Punctuality benchmark",
+      "queryLines": [
+        "SELECT route_short_name, coalesce(route_label, route_short_name) AS route, comparison_basis, our_trips,\n",
+        "  our_punctuality, our_punctuality_low, our_punctuality_high,\n",
+        "  coalesce(official_same_period_punctuality, official_recent_punctuality) AS metlink_punctuality,\n",
+        "  difference_pp, reference_within_interval,\n",
+        "  concat(CAST(official_recent_from AS STRING), ' to ', CAST(official_recent_to AS STRING)) AS metlink_period\n",
+        "FROM gold.punctuality_benchmark\n"
+      ]
+    },
+    {
+      "name": "hotspots",
+      "displayName": "Congestion hotspots",
+      "queryLines": [
+        "SELECT h3_cell, latitude, longitude, routes, peak_speed_kmh, midday_speed_kmh, peak_slowdown_pct,\n",
+        "  peak_samples\n",
+        "FROM gold.congestion_hotspots\n"
+      ]
+    },
+    {
+      "name": "shortfalls",
+      "displayName": "Timetable shortfalls",
+      "queryLines": [
+        "SELECT route_label, from_stop_name, to_stop_name, day_type, hour, trips, round(scheduled_s) AS scheduled_s,\n",
+        "  median_actual_s, suggested_extra_s, excess_trip_minutes\n",
+        "FROM gold.timetable_shortfalls\n"
+      ]
+    },
+    {
+      "name": "quality",
+      "displayName": "Latest data quality results",
+      "queryLines": [
+        "SELECT run_at, check, subject, status, round(value, 3) AS value, threshold, detail\n",
+        "FROM ops.data_quality_results\n",
+        "WHERE run_at = (SELECT max(run_at) FROM ops.data_quality_results)\n"
+      ]
+    },
+    {
+      "name": "usage",
+      "displayName": "Serverless usage",
+      "queryLines": [
+        "SELECT usage_date, billing_origin_product AS product, sum(usage_quantity) AS dbus\n",
+        "FROM system.billing.usage\n",
+        "WHERE usage_date >= current_date() - INTERVAL 30 DAYS\n",
+        "GROUP BY ALL\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "performance",
+      "displayName": "Network performance",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "perf_title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Network performance\n",
+                "Punctuality of observed arrivals against the timetable. **On time** is no more than 1 minute early and less than 5 minutes late."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_date",
+            "queries": [
+              {
+                "name": "perf_date_punctuality",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "service_date",
+                      "expression": "`service_date`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "service_date",
+                    "displayName": "Service date",
+                    "queryName": "perf_date_punctuality"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Service date"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 3,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_mode",
+            "queries": [
+              {
+                "name": "perf_mode_punctuality",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "mode",
+                      "expression": "`mode`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "mode",
+                    "displayName": "Mode",
+                    "queryName": "perf_mode_punctuality"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Mode"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 3,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_otp",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "SUM(`on_time`) / SUM(`arrivals`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "On-time rate",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "On-time rate"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_delay",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "SUM(`total_delay_s`) / SUM(`arrivals`) / 60"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "Average delay (min)",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Average delay (min)"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 3,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_arrivals",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "SUM(`arrivals`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "Arrivals observed",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Arrivals observed"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 3,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_by_hour",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "hour",
+                      "expression": "`hour`"
+                    },
+                    {
+                      "name": "on_time_rate",
+                      "expression": "SUM(`on_time`) / SUM(`arrivals`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "hour",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Scheduled hour"
+                },
+                "y": {
+                  "fieldName": "on_time_rate",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "On-time rate",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "On-time rate by hour of day"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_heatmap",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "hour",
+                      "expression": "`hour`"
+                    },
+                    {
+                      "name": "weekday",
+                      "expression": "`weekday`"
+                    },
+                    {
+                      "name": "avg_delay_min",
+                      "expression": "SUM(`total_delay_s`) / SUM(`arrivals`) / 60"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "heatmap",
+              "encodings": {
+                "x": {
+                  "fieldName": "hour",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Scheduled hour"
+                },
+                "y": {
+                  "fieldName": "weekday",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Weekday"
+                },
+                "color": {
+                  "fieldName": "avg_delay_min",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Average delay (min)",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Average delay by weekday and hour"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 6,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_modes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "mode_group",
+                      "expression": "`mode_group`"
+                    },
+                    {
+                      "name": "on_time_rate",
+                      "expression": "SUM(`on_time`) / SUM(`arrivals`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "on_time_rate",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "On-time rate",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "mode_group",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "x"
+                    }
+                  },
+                  "displayName": "Mode"
+                },
+                "color": {
+                  "fieldName": "mode_group",
+                  "displayName": "Mode",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "bus",
+                        "color": "#2a78d6"
+                      },
+                      {
+                        "value": "rail",
+                        "color": "#eb6834"
+                      },
+                      {
+                        "value": "ferry & cable car",
+                        "color": "#1baf7a"
+                      },
+                      {
+                        "value": "not in service",
+                        "color": "#9a9a94"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "On-time rate by mode"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 2,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "perf_routes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "punctuality",
+                  "fields": [
+                    {
+                      "name": "route_label",
+                      "expression": "`route_label`"
+                    },
+                    {
+                      "name": "on_time_rate",
+                      "expression": "SUM(`on_time`) / SUM(`arrivals`)"
+                    },
+                    {
+                      "name": "mode_group",
+                      "expression": "`mode_group`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "on_time_rate",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "On-time rate",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "route_label",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "x"
+                    }
+                  },
+                  "displayName": "Route"
+                },
+                "color": {
+                  "fieldName": "mode_group",
+                  "displayName": "Mode",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "bus",
+                        "color": "#2a78d6"
+                      },
+                      {
+                        "value": "rail",
+                        "color": "#eb6834"
+                      },
+                      {
+                        "value": "ferry & cable car",
+                        "color": "#1baf7a"
+                      },
+                      {
+                        "value": "not in service",
+                        "color": "#9a9a94"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "On-time rate by route",
+                "showDescription": true,
+                "description": "Lowest first. Routes with few observations are noisy; check arrivals before drawing conclusions."
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 12,
+            "width": 4,
+            "height": 14
+          }
+        }
+      ]
+    },
+    {
+      "name": "headways",
+      "displayName": "Headways and bunching",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "hw_title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Headways and bunching\n",
+                "**Bunching**: a vehicle arrives less than a quarter of the scheduled headway after the one in front. **Headway CV**: standard deviation of (actual - scheduled headway) divided by the mean scheduled headway; lower is more regular."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "hw_date",
+            "queries": [
+              {
+                "name": "hw_date_regularity",
+                "query": {
+                  "datasetName": "regularity",
+                  "fields": [
+                    {
+                      "name": "service_date",
+                      "expression": "`service_date`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "hw_date_bunching",
+                "query": {
+                  "datasetName": "bunching",
+                  "fields": [
+                    {
+                      "name": "service_date",
+                      "expression": "`service_date`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "service_date",
+                    "displayName": "Service date",
+                    "queryName": "hw_date_regularity"
+                  },
+                  {
+                    "fieldName": "service_date",
+                    "displayName": "Service date",
+                    "queryName": "hw_date_bunching"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Service date"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 3,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "hw_mode",
+            "queries": [
+              {
+                "name": "hw_mode_regularity",
+                "query": {
+                  "datasetName": "regularity",
+                  "fields": [
+                    {
+                      "name": "mode",
+                      "expression": "`mode`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "hw_mode_bunching",
+                "query": {
+                  "datasetName": "bunching",
+                  "fields": [
+                    {
+                      "name": "mode",
+                      "expression": "`mode`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "mode",
+                    "displayName": "Mode",
+                    "queryName": "hw_mode_regularity"
+                  },
+                  {
+                    "fieldName": "mode",
+                    "displayName": "Mode",
+                    "queryName": "hw_mode_bunching"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Mode"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 3,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "hw_events",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "regularity",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "SUM(`bunched`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "Bunching events",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Bunching events"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "hw_rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "regularity",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "SUM(`bunched`) / SUM(`headways`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "Share of headways bunched",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Share of headways bunched"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 3,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "hw_cv",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "regularity",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "AVG(`headway_cv`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "Average headway CV",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Average headway CV"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 3,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "hw_by_hour",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "regularity",
+                  "fields": [
+                    {
+                      "name": "hour",
+                      "expression": "`hour`"
+                    },
+                    {
+                      "name": "bunched",
+                      "expression": "SUM(`bunched`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "hour",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Scheduled hour"
+                },
+                "y": {
+                  "fieldName": "bunched",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Bunching events",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Bunching events by hour of day"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "hw_routes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "regularity",
+                  "fields": [
+                    {
+                      "name": "route_label",
+                      "expression": "`route_label`"
+                    },
+                    {
+                      "name": "bunched",
+                      "expression": "SUM(`bunched`)"
+                    },
+                    {
+                      "name": "mode_group",
+                      "expression": "`mode_group`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "bunched",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Bunching events",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "route_label",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "x"
+                    }
+                  },
+                  "displayName": "Route"
+                },
+                "color": {
+                  "fieldName": "mode_group",
+                  "displayName": "Mode",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "bus",
+                        "color": "#2a78d6"
+                      },
+                      {
+                        "value": "rail",
+                        "color": "#eb6834"
+                      },
+                      {
+                        "value": "ferry & cable car",
+                        "color": "#1baf7a"
+                      },
+                      {
+                        "value": "not in service",
+                        "color": "#9a9a94"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Bunching events by route"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 6,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "hw_events_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bunching",
+                  "fields": [
+                    {
+                      "name": "arrived_at",
+                      "expression": "`arrived_at`"
+                    },
+                    {
+                      "name": "route_label",
+                      "expression": "`route_label`"
+                    },
+                    {
+                      "name": "stop_name",
+                      "expression": "`stop_name`"
+                    },
+                    {
+                      "name": "vehicle_id",
+                      "expression": "`vehicle_id`"
+                    },
+                    {
+                      "name": "leading_vehicle_id",
+                      "expression": "`leading_vehicle_id`"
+                    },
+                    {
+                      "name": "actual_headway_min",
+                      "expression": "`actual_headway_min`"
+                    },
+                    {
+                      "name": "scheduled_headway_min",
+                      "expression": "`scheduled_headway_min`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "arrived_at",
+                    "displayName": "Arrived"
+                  },
+                  {
+                    "fieldName": "route_label",
+                    "displayName": "Route"
+                  },
+                  {
+                    "fieldName": "stop_name",
+                    "displayName": "Stop"
+                  },
+                  {
+                    "fieldName": "vehicle_id",
+                    "displayName": "Vehicle"
+                  },
+                  {
+                    "fieldName": "leading_vehicle_id",
+                    "displayName": "Vehicle ahead"
+                  },
+                  {
+                    "fieldName": "actual_headway_min",
+                    "displayName": "Gap (min)"
+                  },
+                  {
+                    "fieldName": "scheduled_headway_min",
+                    "displayName": "Scheduled gap (min)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Bunching events"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "latest",
+      "displayName": "Latest vehicles and alerts",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "live_title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Latest vehicles and alerts\n",
+                "As of the most recent pipeline refresh, not live."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "live_vehicles",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "vehicles",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "COUNT(`vehicle_id`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "Vehicles reporting",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Vehicles reporting"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "live_alerts",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "alerts",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "COUNT(`alert_id`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "Active alerts",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Active alerts"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "live_snapshot",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "vehicles",
+                  "fields": [
+                    {
+                      "name": "value",
+                      "expression": "MAX(`position_at_local`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "value",
+                  "displayName": "Latest position (NZ time)",
+                  "format": {
+                    "type": "date-time",
+                    "dateTimeFormat": "DD MMM HH:mm"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Latest position (NZ time)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "live_map",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "vehicles",
+                  "fields": [
+                    {
+                      "name": "latitude",
+                      "expression": "`latitude`"
+                    },
+                    {
+                      "name": "longitude",
+                      "expression": "`longitude`"
+                    },
+                    {
+                      "name": "mode_group",
+                      "expression": "`mode_group`"
+                    },
+                    {
+                      "name": "route",
+                      "expression": "`route`"
+                    },
+                    {
+                      "name": "vehicle_id",
+                      "expression": "`vehicle_id`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "point-map",
+              "encodings": {
+                "coordinates": {
+                  "latitude": {
+                    "fieldName": "latitude",
+                    "displayName": "Latitude"
+                  },
+                  "longitude": {
+                    "fieldName": "longitude",
+                    "displayName": "Longitude"
+                  }
+                },
+                "color": {
+                  "fieldName": "mode_group",
+                  "displayName": "Mode",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "bus",
+                        "color": "#2a78d6"
+                      },
+                      {
+                        "value": "rail",
+                        "color": "#eb6834"
+                      },
+                      {
+                        "value": "ferry & cable car",
+                        "color": "#1baf7a"
+                      },
+                      {
+                        "value": "not in service",
+                        "color": "#9a9a94"
+                      }
+                    ]
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "route",
+                    "displayName": "Route"
+                  },
+                  {
+                    "fieldName": "vehicle_id",
+                    "displayName": "Vehicle"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Vehicle positions"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 10
+          }
+        },
+        {
+          "widget": {
+            "name": "live_alerts_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "alerts",
+                  "fields": [
+                    {
+                      "name": "effect",
+                      "expression": "`effect`"
+                    },
+                    {
+                      "name": "header_text",
+                      "expression": "`header_text`"
+                    },
+                    {
+                      "name": "routes_affected",
+                      "expression": "`routes_affected`"
+                    },
+                    {
+                      "name": "stops_affected",
+                      "expression": "`stops_affected`"
+                    },
+                    {
+                      "name": "active_from",
+                      "expression": "`active_from`"
+                    },
+                    {
+                      "name": "active_until",
+                      "expression": "`active_until`"
+                    },
+                    {
+                      "name": "severity_level",
+                      "expression": "`severity_level`"
+                    },
+                    {
+                      "name": "cause",
+                      "expression": "`cause`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "effect",
+                    "displayName": "Effect"
+                  },
+                  {
+                    "fieldName": "header_text",
+                    "displayName": "Alert"
+                  },
+                  {
+                    "fieldName": "routes_affected",
+                    "displayName": "Routes"
+                  },
+                  {
+                    "fieldName": "stops_affected",
+                    "displayName": "Stops"
+                  },
+                  {
+                    "fieldName": "active_from",
+                    "displayName": "From"
+                  },
+                  {
+                    "fieldName": "active_until",
+                    "displayName": "Until"
+                  },
+                  {
+                    "fieldName": "severity_level",
+                    "displayName": "Severity"
+                  },
+                  {
+                    "fieldName": "cause",
+                    "displayName": "Cause"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Active service alerts"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 15,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "network",
+      "displayName": "Benchmark and network",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "net_title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Benchmark and network\n",
+                "**Benchmark**: bus punctuality measured the way Metlink publishes it (departure from the first stop, less than 1 min 15 s early and less than 5 min 15 s late) against Metlink's figure. Until Metlink publishes the same weeks, the comparison is with its latest published weeks."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "net_benchmark",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "benchmark",
+                  "fields": [
+                    {
+                      "name": "route",
+                      "expression": "`route`"
+                    },
+                    {
+                      "name": "our_trips",
+                      "expression": "`our_trips`"
+                    },
+                    {
+                      "name": "our_punctuality",
+                      "expression": "`our_punctuality`"
+                    },
+                    {
+                      "name": "our_punctuality_low",
+                      "expression": "`our_punctuality_low`"
+                    },
+                    {
+                      "name": "our_punctuality_high",
+                      "expression": "`our_punctuality_high`"
+                    },
+                    {
+                      "name": "metlink_punctuality",
+                      "expression": "`metlink_punctuality`"
+                    },
+                    {
+                      "name": "difference_pp",
+                      "expression": "`difference_pp`"
+                    },
+                    {
+                      "name": "reference_within_interval",
+                      "expression": "`reference_within_interval`"
+                    },
+                    {
+                      "name": "comparison_basis",
+                      "expression": "`comparison_basis`"
+                    },
+                    {
+                      "name": "metlink_period",
+                      "expression": "`metlink_period`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "route",
+                    "displayName": "Route"
+                  },
+                  {
+                    "fieldName": "our_trips",
+                    "displayName": "Departures observed"
+                  },
+                  {
+                    "fieldName": "our_punctuality",
+                    "displayName": "Our punctuality"
+                  },
+                  {
+                    "fieldName": "our_punctuality_low",
+                    "displayName": "95% low"
+                  },
+                  {
+                    "fieldName": "our_punctuality_high",
+                    "displayName": "95% high"
+                  },
+                  {
+                    "fieldName": "metlink_punctuality",
+                    "displayName": "Metlink published"
+                  },
+                  {
+                    "fieldName": "difference_pp",
+                    "displayName": "Difference (pp)"
+                  },
+                  {
+                    "fieldName": "reference_within_interval",
+                    "displayName": "Within interval"
+                  },
+                  {
+                    "fieldName": "comparison_basis",
+                    "displayName": "Compared with"
+                  },
+                  {
+                    "fieldName": "metlink_period",
+                    "displayName": "Metlink weeks"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Punctuality against Metlink's published figures"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "net_hotspots",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "hotspots",
+                  "fields": [
+                    {
+                      "name": "latitude",
+                      "expression": "`latitude`"
+                    },
+                    {
+                      "name": "longitude",
+                      "expression": "`longitude`"
+                    },
+                    {
+                      "name": "peak_slowdown_pct",
+                      "expression": "`peak_slowdown_pct`"
+                    },
+                    {
+                      "name": "peak_speed_kmh",
+                      "expression": "`peak_speed_kmh`"
+                    },
+                    {
+                      "name": "midday_speed_kmh",
+                      "expression": "`midday_speed_kmh`"
+                    },
+                    {
+                      "name": "routes",
+                      "expression": "`routes`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "point-map",
+              "encodings": {
+                "coordinates": {
+                  "latitude": {
+                    "fieldName": "latitude",
+                    "displayName": "Latitude"
+                  },
+                  "longitude": {
+                    "fieldName": "longitude",
+                    "displayName": "Longitude"
+                  }
+                },
+                "color": {
+                  "fieldName": "peak_slowdown_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Peak slowdown (%)"
+                },
+                "extra": [
+                  {
+                    "fieldName": "peak_speed_kmh",
+                    "displayName": "Peak km/h"
+                  },
+                  {
+                    "fieldName": "midday_speed_kmh",
+                    "displayName": "Midday km/h"
+                  },
+                  {
+                    "fieldName": "routes",
+                    "displayName": "Routes"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Congestion hotspots",
+                "showDescription": true,
+                "description": "Bus speed in each ~0.1 km\u00b2 cell, weekday 07:00\u201309:00 against 10:00\u201315:00. Speeds include time at stops and signals."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 10,
+            "width": 3,
+            "height": 10
+          }
+        },
+        {
+          "widget": {
+            "name": "net_shortfalls",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "shortfalls",
+                  "fields": [
+                    {
+                      "name": "route_label",
+                      "expression": "`route_label`"
+                    },
+                    {
+                      "name": "from_stop_name",
+                      "expression": "`from_stop_name`"
+                    },
+                    {
+                      "name": "to_stop_name",
+                      "expression": "`to_stop_name`"
+                    },
+                    {
+                      "name": "day_type",
+                      "expression": "`day_type`"
+                    },
+                    {
+                      "name": "hour",
+                      "expression": "`hour`"
+                    },
+                    {
+                      "name": "trips",
+                      "expression": "`trips`"
+                    },
+                    {
+                      "name": "scheduled_s",
+                      "expression": "`scheduled_s`"
+                    },
+                    {
+                      "name": "median_actual_s",
+                      "expression": "`median_actual_s`"
+                    },
+                    {
+                      "name": "suggested_extra_s",
+                      "expression": "`suggested_extra_s`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "route_label",
+                    "displayName": "Route"
+                  },
+                  {
+                    "fieldName": "from_stop_name",
+                    "displayName": "From"
+                  },
+                  {
+                    "fieldName": "to_stop_name",
+                    "displayName": "To"
+                  },
+                  {
+                    "fieldName": "day_type",
+                    "displayName": "Days"
+                  },
+                  {
+                    "fieldName": "hour",
+                    "displayName": "Hour"
+                  },
+                  {
+                    "fieldName": "trips",
+                    "displayName": "Trips"
+                  },
+                  {
+                    "fieldName": "scheduled_s",
+                    "displayName": "Scheduled (s)"
+                  },
+                  {
+                    "fieldName": "median_actual_s",
+                    "displayName": "Median actual (s)"
+                  },
+                  {
+                    "fieldName": "suggested_extra_s",
+                    "displayName": "Suggested extra (s)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Where the timetable is consistently too short",
+                "showDescription": true,
+                "description": "Segments where the median trip takes at least 60 s longer than scheduled, from at least 20 trips."
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 10,
+            "width": 3,
+            "height": 10
+          }
+        }
+      ]
+    },
+    {
+      "name": "operations",
+      "displayName": "Operations",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "ops_title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Operations\n",
+                "Latest data quality run, and serverless usage over the last 30 days (usage data arrives with a delay of several hours)."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "ops_quality",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "quality",
+                  "fields": [
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "check",
+                      "expression": "`check`"
+                    },
+                    {
+                      "name": "subject",
+                      "expression": "`subject`"
+                    },
+                    {
+                      "name": "value",
+                      "expression": "`value`"
+                    },
+                    {
+                      "name": "threshold",
+                      "expression": "`threshold`"
+                    },
+                    {
+                      "name": "detail",
+                      "expression": "`detail`"
+                    },
+                    {
+                      "name": "run_at",
+                      "expression": "`run_at`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "status",
+                    "displayName": "Status"
+                  },
+                  {
+                    "fieldName": "check",
+                    "displayName": "Check"
+                  },
+                  {
+                    "fieldName": "subject",
+                    "displayName": "Subject"
+                  },
+                  {
+                    "fieldName": "value",
+                    "displayName": "Value"
+                  },
+                  {
+                    "fieldName": "threshold",
+                    "displayName": "Threshold"
+                  },
+                  {
+                    "fieldName": "detail",
+                    "displayName": "Detail"
+                  },
+                  {
+                    "fieldName": "run_at",
+                    "displayName": "Run at (UTC)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Data quality checks"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "ops_usage",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "usage",
+                  "fields": [
+                    {
+                      "name": "usage_date",
+                      "expression": "`usage_date`"
+                    },
+                    {
+                      "name": "dbus",
+                      "expression": "SUM(`dbus`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_date",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Date"
+                },
+                "y": {
+                  "fieldName": "dbus",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "DBUs",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Serverless usage per day"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ]
+    }
+  ]
+}

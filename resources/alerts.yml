@@ -1,0 +1,35 @@
+# SQL alerts, evaluated after the daily job has refreshed the pipeline.
+resources:
+  alerts:
+    route_delay:
+      display_name: Metlink route average delay over 10 minutes
+      custom_summary: A route averaged more than 10 minutes late on the latest service date
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        WITH latest AS (SELECT max(service_date) AS d FROM ${var.catalog}.gold.route_ontime_hourly),
+        routes AS (
+          SELECT route_label, sum(avg_delay_s * arrivals) / sum(arrivals) / 60 AS avg_delay_min
+          FROM ${var.catalog}.gold.route_ontime_hourly, latest
+          WHERE service_date = latest.d
+          GROUP BY route_label
+          HAVING sum(arrivals) >= 50
+        )
+        SELECT coalesce(max(avg_delay_min), 0) AS worst_route_avg_delay_min,
+               max_by(route_label, avg_delay_min) AS worst_route
+        FROM routes
+      evaluation:
+        source:
+          name: worst_route_avg_delay_min
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: 10
+        empty_result_state: OK
+        notification:
+          notify_on_ok: false
+          subscriptions:
+            - user_email: ${workspace.current_user.userName}
+      schedule:
+        quartz_cron_schedule: "0 30 6 * * ?"
+        timezone_id: Pacific/Auckland
+        pause_status: ${var.daily_pause_status}
