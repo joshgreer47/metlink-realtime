@@ -23,10 +23,17 @@ for schema, comment in [
     ("silver", "Cleaned, typed, deduplicated"),
     ("gold", "Business-level aggregates for BI and ML"),
     ("ml", "Feature tables and registered models"),
+    ("ops", "Operational metadata such as data quality results"),
 ]:
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema} COMMENT '{comment}'")
 
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.bronze.raw COMMENT 'Landing zone for files uploaded by the collectors'")
+spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {catalog}.ops.data_quality_results (
+      run_at TIMESTAMP, catalog STRING, check STRING, subject STRING, status STRING,
+      value DOUBLE, threshold DOUBLE, detail STRING
+    ) COMMENT 'Data quality check results, one row per check per run'
+""")
 
 # COMMAND ----------
 

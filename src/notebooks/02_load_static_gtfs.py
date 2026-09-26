@@ -11,11 +11,13 @@
 # MAGIC |---|---|---|
 # MAGIC | `catalog` | `metlink` | |
 # MAGIC | `version` | latest | Feed version folder (`YYYY-MM-DD`) |
+# MAGIC | `force` | `false` | Reload even if this version is already loaded |
 
 # COMMAND ----------
 
 dbutils.widgets.text("catalog", "metlink")
 dbutils.widgets.text("version", "", "version (blank = latest)")
+dbutils.widgets.dropdown("force", "false", ["true", "false"])
 catalog = dbutils.widgets.get("catalog")
 static_root = f"/Volumes/{catalog}/bronze/raw/gtfs_static"
 
@@ -23,6 +25,14 @@ versions = sorted(f.name.rstrip("/") for f in dbutils.fs.ls(static_root))
 version = dbutils.widgets.get("version") or versions[-1]
 source_dir = f"{static_root}/{version}"
 print(f"available versions: {versions}\nloading: {source_dir}")
+
+# COMMAND ----------
+
+loaded = None
+if spark.catalog.tableExists(f"{catalog}.bronze.gtfs_trips"):
+    loaded = spark.sql(f"SELECT max(_feed_version) FROM {catalog}.bronze.gtfs_trips").first()[0]
+if loaded == version and dbutils.widgets.get("force") != "true":
+    dbutils.notebook.exit(f"version {version} already loaded")
 
 # COMMAND ----------
 
