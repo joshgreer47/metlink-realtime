@@ -51,8 +51,8 @@ def vehicle_positions():
 
 dp.create_streaming_table(
     name=f"{CATALOG}.silver.vehicle_current",
-    comment="Latest known position of each vehicle (SCD type 1)",
-    table_properties={"quality": "silver"},
+    comment="Latest known position of each vehicle (SCD type 1). Change data feed is enabled.",
+    table_properties={"quality": "silver", "delta.enableChangeDataFeed": "true"},
 )
 
 dp.create_auto_cdc_flow(
