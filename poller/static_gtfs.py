@@ -16,7 +16,7 @@ from pathlib import Path
 
 import requests
 
-from poller.config import STATIC_GTFS_URL, load_settings
+from poller.config import STATIC_GTFS_URL, Settings, load_settings
 
 log = logging.getLogger("static_gtfs")
 
@@ -60,16 +60,20 @@ def upload(version_dir: Path, volume_root: str) -> None:
     marker.touch()
 
 
+def refresh(settings: Settings, upload_enabled: bool = True) -> Path:
+    """Download the current feed version if it is new, and upload it if it has not been uploaded yet."""
+    version_dir = download(settings.data_dir / "gtfs_static")
+    if upload_enabled:
+        upload(version_dir, settings.volume_path)
+    return version_dir
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--no-upload", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-
-    settings = load_settings()
-    version_dir = download(settings.data_dir / "gtfs_static")
-    if not args.no_upload:
-        upload(version_dir, settings.volume_path)
+    refresh(load_settings(), upload_enabled=not args.no_upload)
 
 
 if __name__ == "__main__":

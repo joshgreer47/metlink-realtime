@@ -78,3 +78,58 @@ def test_upload_pending_keeps_files_on_failure(tmp_path: Path):
 
     assert upload_pending(tmp_path, "/Volumes/x", FlakyUploader()) == 1
     assert [p.name for p in (tmp_path / "a").iterdir()] == ["a_20260926T000500Z.jsonl"]
+
+
+def test_volume_path_handles_gzip():
+    p = Path("data/sim/spool/tripupdates/tripupdates_20260926T001500Z.jsonl.gz")
+    assert volume_path_for(p, "/Volumes/metlink_sim/bronze/raw") == (
+        "/Volumes/metlink_sim/bronze/raw/realtime/tripupdates/date=2026-09-26/tripupdates_20260926T001500Z.jsonl.gz"
+    )
+
+
+def test_periodic_task_runs_once_per_interval_without_overlap():
+    import threading
+
+    from poller.metlink_poller import PeriodicTask
+
+    release, calls = threading.Event(), []
+    task = PeriodicTask("t", lambda: (calls.append(1), release.wait(5)), interval_seconds=100)
+
+    assert task.maybe_start(now=0)
+    assert not task.maybe_start(now=200)  # still running: no overlap
+    release.set()
+    task._thread.join(5)
+    assert not task.maybe_start(now=50)  # finished, but interval not elapsed
+    assert task.maybe_start(now=200)
+    task._thread.join(5)
+    assert len(calls) == 2
+
+
+def test_periodic_task_survives_errors_and_can_be_disabled():
+    from poller.metlink_poller import PeriodicTask
+
+    task = PeriodicTask("t", lambda: 1 / 0, interval_seconds=1)
+    assert task.maybe_start(now=0)
+    task._thread.join(5)
+    assert task.maybe_start(now=2)  # an error doesn't stop future runs
+    task._thread.join(5)
+    assert not PeriodicTask("off", lambda: None, interval_seconds=0).maybe_start(now=0)
+
+
+def test_find_official_releases():
+    from poller.official_performance import find_releases
+
+    html = """<a href="/assets/Perf/metlink-weekly-bus-performance-to-2026-03-29.csv">CSV</a>
+              <a href='https://www.metlink.org.nz/assets/Perf/metlink-daily-bus-performance-to-2026-03-29.csv'>CSV</a>
+              <a href="/assets/Perf/metlink-weekly-bus-performance-to-2026-03-29.xlsx">Excel</a>"""
+    releases = find_releases(html, "https://www.metlink.org.nz/about-us/performance-of-our-network")
+    assert releases == {
+        "metlink-weekly-bus-performance-to-2026-03-29.csv": (
+            "weekly",
+            "https://www.metlink.org.nz/assets/Perf/metlink-weekly-bus-performance-to-2026-03-29.csv",
+        ),
+        "metlink-daily-bus-performance-to-2026-03-29.csv": (
+            "daily",
+            "https://www.metlink.org.nz/assets/Perf/metlink-daily-bus-performance-to-2026-03-29.csv",
+        ),
+    }

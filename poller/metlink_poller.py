@@ -16,7 +16,9 @@ Usage:
 import argparse
 import json
 import logging
+import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from google.protobuf.json_format import MessageToDict
 from google.transit import gtfs_realtime_pb2
 
 from poller.config import FEEDS, REALTIME_BASE_URL, Settings, load_settings
+from poller.runtime import AlreadyRunning, configure_logging, keep_awake, single_instance
 
 log = logging.getLogger("metlink_poller")
 
@@ -98,9 +101,9 @@ class BatchWriter:
 
 
 def volume_path_for(spool_file: Path, volume_root: str) -> str:
-    """data/spool/<feed>/<feed>_20260926T001500Z.jsonl -> <root>/realtime/<feed>/date=2026-09-26/<name>"""
+    """data/spool/<feed>/<feed>_20260926T001500Z.jsonl[.gz] -> <root>/realtime/<feed>/date=2026-09-26/<name>"""
     feed = spool_file.parent.name
-    stamp = spool_file.stem.rsplit("_", 1)[1]
+    stamp = spool_file.name.split(".", 1)[0].rsplit("_", 1)[1]
     date = f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]}"
     return f"{volume_root}/realtime/{feed}/date={date}/{spool_file.name}"
 
@@ -108,7 +111,7 @@ def volume_path_for(spool_file: Path, volume_root: str) -> str:
 def upload_pending(spool_dir: Path, volume_root: str, uploader) -> int:
     """Upload every spooled file; delete each after success. Failures retry next flush."""
     uploaded = 0
-    for path in sorted(spool_dir.glob("*/*.jsonl")):
+    for path in sorted(spool_dir.glob("*/*.jsonl*")):
         try:
             uploader.upload(path, volume_path_for(path, volume_root))
         except Exception:
@@ -134,6 +137,34 @@ def poll_once(session: requests.Session, settings: Settings, writer: BatchWriter
             log.debug("%s: unchanged, skipped", feed)
 
 
+class PeriodicTask:
+    """Runs fn in a background thread at most once per interval, never overlapping itself.
+
+    Used for the static GTFS refresh, whose upload can take minutes and must not pause realtime polling.
+    """
+
+    def __init__(self, name: str, fn: Callable[[], object], interval_seconds: float):
+        self.name, self.fn, self.interval = name, fn, interval_seconds
+        self._last_start: float | None = None
+        self._thread: threading.Thread | None = None
+
+    def _run(self) -> None:
+        try:
+            self.fn()
+        except Exception:
+            log.exception("%s failed; will retry at the next interval", self.name)
+
+    def maybe_start(self, now: float) -> bool:
+        if self.interval <= 0 or (self._thread and self._thread.is_alive()):
+            return False
+        if self._last_start is not None and now - self._last_start < self.interval:
+            return False
+        self._last_start = now
+        self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
+        self._thread.start()
+        return True
+
+
 def run(settings: Settings, once: bool, upload: bool) -> None:
     if not settings.metlink_api_key:
         raise SystemExit("METLINK_API_KEY is not set (see .env.example)")
@@ -145,11 +176,25 @@ def run(settings: Settings, once: bool, upload: bool) -> None:
         from poller.uploader import VolumeUploader
 
         uploader = VolumeUploader()
+        if not uploader.volume_exists(settings.volume_path):
+            log.error("volume %s does not exist; batches will stay in the spool until it does", settings.volume_path)
 
     def flush() -> None:
         writer.flush(datetime.now(timezone.utc))
         if uploader:
-            upload_pending(spool_dir, settings.volume_path, uploader)
+            uploaded = upload_pending(spool_dir, settings.volume_path, uploader)
+            waiting = sum(1 for _ in spool_dir.glob("*/*.jsonl*"))
+            log.info("uploaded %d files (%d waiting in spool)", uploaded, waiting)
+
+    from poller import official_performance, static_gtfs
+
+    refresh_interval = 0 if once else settings.static_refresh_hours * 3600
+    daily_refreshes = [
+        PeriodicTask("static GTFS refresh", lambda: static_gtfs.refresh(settings, upload), refresh_interval),
+        PeriodicTask(
+            "official performance refresh", lambda: official_performance.refresh(settings, upload), refresh_interval
+        ),
+    ]
 
     session = requests.Session()
     last_flush = time.monotonic()
@@ -163,6 +208,8 @@ def run(settings: Settings, once: bool, upload: bool) -> None:
     try:
         while True:
             started = time.monotonic()
+            for task in daily_refreshes:
+                task.maybe_start(started)
             poll_once(session, settings, writer)
             if once:
                 break
@@ -180,13 +227,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--once", action="store_true", help="poll each feed once, flush, exit")
     parser.add_argument("--no-upload", action="store_true", help="keep files in data/spool")
+    parser.add_argument("--log-file", type=Path, help="also log to this file (rotated at 5 MB)")
+    parser.add_argument("--keep-awake", action="store_true", help="prevent Windows from sleeping while running")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
-    run(load_settings(), once=args.once, upload=not args.no_upload)
+    configure_logging(args.verbose, args.log_file)
+    settings = load_settings()
+    try:
+        with single_instance(settings.data_dir / "metlink_poller.lock"), keep_awake(args.keep_awake):
+            run(settings, once=args.once, upload=not args.no_upload)
+    except AlreadyRunning as e:
+        raise SystemExit(f"metlink_poller is already running ({e})") from None
 
 
 if __name__ == "__main__":

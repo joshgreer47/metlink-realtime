@@ -21,6 +21,7 @@ class Settings:
     volume_path: str
     poll_interval_seconds: int
     batch_seconds: int
+    static_refresh_hours: float
     data_dir: Path
 
 
@@ -30,5 +31,6 @@ def load_settings() -> Settings:
         volume_path=os.environ.get("METLINK_VOLUME_PATH", "/Volumes/metlink/bronze/raw").rstrip("/"),
         poll_interval_seconds=int(os.environ.get("POLL_INTERVAL_SECONDS", "30")),
         batch_seconds=int(os.environ.get("BATCH_SECONDS", "300")),
+        static_refresh_hours=float(os.environ.get("STATIC_REFRESH_HOURS", "24")),
         data_dir=REPO_ROOT / "data",
     )
